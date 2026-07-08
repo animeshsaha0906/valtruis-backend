@@ -25,6 +25,11 @@ chroma_client = chromadb.Client()
 collection = chroma_client.get_or_create_collection(name="valtruis_pipeline")
 claude_client = Anthropic()
 
+# Cache of the last portfolio analysis so /api/chat can explain the exact
+# scores and sources already shown on the dashboard, instead of re-deriving
+# a possibly inconsistent answer from scratch on every question.
+latest_portfolio: dict[str, dict] = {}
+
 class CompanyInsightLLM(BaseModel):
     name: str = Field(description="Name of the company (Must be exactly one of the 5 watchlist targets)")
     sector: str = Field(description="Specific VBC sector, e.g., Home-Based Primary Care, Kidney Care, Behavioral Health")
@@ -160,24 +165,56 @@ def get_realtime_insights():
         CompanyInsight(**company.model_dump(), sources=get_company_sources(company.name, company.sector))
         for company in parsed.companies
     ]
+
+    latest_portfolio.clear()
+    latest_portfolio.update({c.name: c.model_dump() for c in companies})
+
     return PortfolioData(companies=companies).model_dump()
+
+def format_portfolio_for_chat() -> str:
+    if not latest_portfolio:
+        return "No portfolio analysis has been generated yet — the dashboard hasn't loaded /api/companies in this session."
+
+    blocks = []
+    for company in latest_portfolio.values():
+        sources = ", ".join(s["url"] for s in company["sources"]) or "none"
+        blocks.append(
+            f"{company['name']} — Alignment: {company['alignment']}/100, "
+            f"Predictive Valuation: ${company['valuation']}M, Sentiment: {company['sentiment']}\n"
+            f"Metrics: {company['key_metrics']}\n"
+            f"Thesis (this is the exact reasoning you already gave for this score): {company['why_invest']}\n"
+            f"Real sources behind this thesis: {sources}"
+        )
+    return "\n\n".join(blocks)
 
 @app.post("/api/chat")
 def chat_with_analyst(request: ChatRequest):
     try:
-        results = collection.query(query_texts=[request.message], n_results=4)
+        results = collection.query(query_texts=[request.message], n_results=6)
         retrieved_context = " ".join(results["documents"][0]) if results["documents"] else ""
     except Exception:
         retrieved_context = "Value-based care market acceleration."
 
     chat_prompt = f"""
-    You are an AI Investment Analyst for Valtruis, a private equity firm focused on Value-Based Care (VBC).
-    Answer the user's question professionally, concisely, and cleanly.
+    You are the AI Investment Analyst for Valtruis, a private equity firm focused on Value-Based Care (VBC).
+    Answer the user's question professionally, but with real substance and specificity — this is an institutional
+    audience asking follow-up diligence questions, not small talk.
 
-    Context from our research database: {retrieved_context}
+    You previously generated the portfolio analysis below, currently shown on the dashboard. If the user asks why
+    you scored, valued, or characterized any of these companies a certain way, or asks for the source behind a
+    claim, answer using this exact prior reasoning rather than inventing a new rationale:
+
+    {format_portfolio_for_chat()}
+
+    Additional live market context you can draw on for broader questions:
+    {retrieved_context}
+
     User Question: {request.message}
 
-    Always frame your answers around shifting away from fee-for-service models into downside risk allocation.
+    If you cite a source, output its exact URL verbatim, on its own, exactly as it appears above (e.g.
+    "Source: https://..."). Never invent or alter a URL — only cite ones listed above. If nothing above is
+    relevant to the question, say so plainly rather than guessing.
+    Frame answers around the shift away from fee-for-service models into downside risk allocation where relevant.
     """
 
     response = claude_client.messages.create(

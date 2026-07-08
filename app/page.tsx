@@ -32,12 +32,33 @@ const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: any[] 
         <p className="font-bold text-sm mb-1">{data.name}</p>
         <p className="text-slate-400 font-medium mb-2">{data.sector}</p>
         <p className="mb-2"><span className="text-slate-400">Predictive Valuation:</span> ${data.valuation}M</p>
-        <p className="text-slate-300 leading-relaxed"><span className="text-emerald-400 font-semibold">Thesis:</span> {data.why_invest}</p>
+        <p className="text-slate-300 leading-relaxed mb-1"><span className="text-emerald-400 font-semibold">Thesis:</span> {data.why_invest}</p>
+        <p className="text-slate-500 italic">Click for full analysis & sources</p>
       </div>
     );
   }
   return null;
 };
+
+const URL_SPLIT_REGEX = /(https?:\/\/[^\s)]+)/g;
+
+function renderWithLinks(text: string) {
+  return text.split(URL_SPLIT_REGEX).map((part, idx) =>
+    part.startsWith('http') ? (
+      <a
+        key={idx}
+        href={part}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="underline decoration-emerald-400/50 text-emerald-700 hover:text-emerald-800 break-all"
+      >
+        {part}
+      </a>
+    ) : (
+      <React.Fragment key={idx}>{part}</React.Fragment>
+    )
+  );
+}
 
 export default function ValtruisDashboard() {
   const [filter, setFilter] = useState('All');
@@ -53,6 +74,10 @@ export default function ValtruisDashboard() {
   ]);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+
+  // Detail Modal State
+  const [selectedCompany, setSelectedCompany] = useState<CompanyInsight | null>(null);
 
   useEffect(() => {
     fetch('https://valtruis-backend.onrender.com/api/companies')
@@ -89,11 +114,12 @@ export default function ValtruisDashboard() {
     setIsChatLoading(true);
 
     try {
-      const res = await fetch('https://valtruis-backend.onrender.com/api/companies', {
+      const res = await fetch('https://valtruis-backend.onrender.com/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMessage })
       });
+      if (!res.ok) throw new Error('Chat backend returned an error');
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'ai', text: data.reply }]);
     } catch (err) {
@@ -101,6 +127,13 @@ export default function ValtruisDashboard() {
     } finally {
       setIsChatLoading(false);
     }
+  };
+
+  const askAiAbout = (company: CompanyInsight) => {
+    setSelectedCompany(null);
+    setIsChatOpen(true);
+    setChatInput(`Why did you give ${company.name} an alignment score of ${company.alignment} and a valuation of $${company.valuation}M? What's the source?`);
+    setTimeout(() => chatInputRef.current?.focus(), 50);
   };
 
   if (loading) {
@@ -148,7 +181,7 @@ export default function ValtruisDashboard() {
           <div className="flex justify-between items-center mb-6">
             <div>
               <h2 className="text-lg font-bold text-slate-800">Target Alignment Matrix</h2>
-              <p className="text-slate-400 text-xs mt-0.5">Hover over node matrices to stream predictive investment structures</p>
+              <p className="text-slate-400 text-xs mt-0.5">Click a node or card for the full investment thesis and sources</p>
             </div>
             <select 
               className="p-2 border border-slate-200 rounded-md bg-white text-xs font-medium outline-none focus:ring-1 focus:ring-slate-400"
@@ -166,12 +199,12 @@ export default function ValtruisDashboard() {
                 <XAxis type="number" dataKey="alignment" name="VBC Alignment" domain={[65, 100]} tick={{ fill: '#94a3b8', fontSize: 11 }} label={{ value: 'Downside Risk Alignment Score ➔', position: 'insideBottomRight', offset: -10, fill: '#64748b', fontSize: 11, fontWeight: 500 }} />
                 <YAxis type="number" dataKey="valuation" name="Valuation" domain={['auto', 'auto']} tick={{ fill: '#94a3b8', fontSize: 11 }} label={{ value: 'Predictive 24M Valuation ($M) ➔', angle: -90, position: 'insideLeft', offset: 15, fill: '#64748b', fontSize: 11, fontWeight: 500 }} />
                 <Tooltip content={<CustomTooltip />} isAnimationActive={false} />
-                <Scatter data={filteredData}>
+                <Scatter data={filteredData} onClick={(point: any) => setSelectedCompany(point)} cursor="pointer">
                   {filteredData.map((entry, idx) => (
-                    <Cell 
-                      key={idx} 
-                      className="cursor-pointer transition-colors duration-200" 
-                      fill={entry.sentiment === 'Positive' ? '#10b981' : entry.sentiment === 'Negative' ? '#ef4444' : '#f59e0b'} 
+                    <Cell
+                      key={idx}
+                      className="cursor-pointer transition-colors duration-200"
+                      fill={entry.sentiment === 'Positive' ? '#10b981' : entry.sentiment === 'Negative' ? '#ef4444' : '#f59e0b'}
                     />
                   ))}
                 </Scatter>
@@ -183,7 +216,14 @@ export default function ValtruisDashboard() {
         {/* Dynamic Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredData.map(company => (
-            <div key={company.name} className="group relative bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:border-slate-400 transition-all duration-300 flex flex-col justify-between overflow-hidden">
+            <div
+              key={company.name}
+              onClick={() => setSelectedCompany(company)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedCompany(company); }}
+              className="group relative bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:border-emerald-400 hover:shadow-md cursor-pointer transition-all duration-300 flex flex-col justify-between overflow-hidden focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            >
               <div>
                 <div className="flex justify-between items-start mb-2">
                   <div>
@@ -217,26 +257,84 @@ export default function ValtruisDashboard() {
                 )}
               </div>
 
-              {/* Hover-reveal Overlay Slide: Insights Deep Dive */}
-              <div className="absolute inset-0 bg-slate-950 p-6 text-white translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out flex flex-col justify-between z-10">
-                <div>
-                  <h4 className="text-emerald-400 text-xs font-bold uppercase tracking-widest mb-2">Investment Thesis</h4>
-                  <p className="text-slate-200 text-xs leading-relaxed font-normal">{company.why_invest}</p>
-                </div>
-                <div className="border-t border-slate-800 pt-3 flex justify-between text-[10px] font-mono text-slate-400">
-                  <span>Risk Vector: {company.alignment}/100</span>
-                  <span>Proj. Cap: ${company.valuation}M</span>
-                </div>
-              </div>
-
-              <div className="flex justify-between text-xs font-bold border-t border-slate-100 pt-4 bg-white relative z-0">
+              <div className="flex justify-between items-center text-xs font-bold border-t border-slate-100 pt-4 bg-white relative z-0">
                 <span className="text-slate-500">Alignment: <span className="text-slate-800 font-mono">{company.alignment}%</span></span>
                 <span className="text-slate-500">Target Cap: <span className="text-slate-800 font-mono">${company.valuation}M</span></span>
+              </div>
+              <div className="mt-2 text-[9px] font-semibold text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity text-center">
+                View full thesis →
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      {/* Company Detail Modal */}
+      {selectedCompany && (
+        <div
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+          onClick={() => setSelectedCompany(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-slate-950 p-6 text-white relative">
+              <button
+                onClick={() => setSelectedCompany(null)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white focus:outline-none"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+              </button>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{selectedCompany.sector}</p>
+              <h3 className="font-extrabold text-2xl">{selectedCompany.name}</h3>
+              <span className={`inline-block mt-2 px-2 py-0.5 rounded text-[9px] font-bold tracking-wide uppercase ${
+                selectedCompany.sentiment === 'Positive' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+              }`}>{selectedCompany.sentiment}</span>
+              <div className="flex gap-6 mt-4 text-xs font-mono text-slate-300">
+                <span>Alignment: <span className="text-white font-bold">{selectedCompany.alignment}/100</span></span>
+                <span>Valuation: <span className="text-white font-bold">${selectedCompany.valuation}M</span></span>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <p className="text-slate-600 text-sm leading-relaxed mb-4">{selectedCompany.description}</p>
+
+              <h4 className="text-emerald-600 text-xs font-bold uppercase tracking-widest mb-2">Investment Thesis</h4>
+              <p className="text-slate-700 text-xs leading-relaxed mb-4">{selectedCompany.why_invest}</p>
+
+              <h4 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-2">Key Metrics</h4>
+              <p className="text-slate-600 font-mono text-xs mb-4">{selectedCompany.key_metrics}</p>
+
+              {selectedCompany.sources.length > 0 && (
+                <>
+                  <h4 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-2">Sources</h4>
+                  <div className="flex flex-col gap-1.5 mb-4">
+                    {selectedCompany.sources.map((source, idx) => (
+                      <a
+                        key={idx}
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-emerald-700 underline decoration-emerald-300 hover:text-emerald-800 truncate"
+                      >
+                        {source.title}
+                      </a>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <button
+                onClick={() => askAiAbout(selectedCompany)}
+                className="w-full mt-2 bg-slate-900 text-white py-2.5 rounded-md text-xs font-semibold hover:bg-slate-800 transition-colors"
+              >
+                Ask AI Co-Pilot about this decision
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Chat Interface Container */}
       <div className="fixed bottom-6 right-6 z-50">
@@ -260,8 +358,8 @@ export default function ValtruisDashboard() {
             {/* Chat History Messages */}
             <div className="flex-1 overflow-y-auto p-4 bg-slate-50 flex flex-col gap-3">
               {messages.map((msg, idx) => (
-                <div key={idx} className={`max-w-[85%] p-2.5 rounded-lg text-xs leading-relaxed ${msg.role === 'ai' ? 'bg-white border border-slate-200 text-slate-700 self-start' : 'bg-slate-900 text-white self-end'}`}>
-                  {msg.text}
+                <div key={idx} className={`max-w-[85%] p-2.5 rounded-lg text-xs leading-relaxed whitespace-pre-wrap ${msg.role === 'ai' ? 'bg-white border border-slate-200 text-slate-700 self-start' : 'bg-slate-900 text-white self-end'}`}>
+                  {msg.role === 'ai' ? renderWithLinks(msg.text) : msg.text}
                 </div>
               ))}
               {isChatLoading && (
@@ -274,11 +372,12 @@ export default function ValtruisDashboard() {
 
             {/* Chat Submission Block */}
             <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-slate-200 flex gap-2">
-              <input 
-                type="text" 
+              <input
+                ref={chatInputRef}
+                type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask regarding alignment vectors..." 
+                placeholder="Ask regarding alignment vectors..."
                 className="flex-1 border border-slate-300 rounded-md px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-slate-400"
               />
               <button type="submit" disabled={isChatLoading || !chatInput.trim()} className="bg-slate-900 text-white px-4 py-1.5 rounded-md text-xs font-semibold disabled:opacity-40">
