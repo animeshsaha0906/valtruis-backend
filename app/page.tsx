@@ -2,6 +2,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
+interface SourceLink {
+  title: string;
+  url: string;
+}
+
 interface CompanyInsight {
   name: string;
   sector: string;
@@ -11,6 +16,7 @@ interface CompanyInsight {
   description: string;
   why_invest: string;
   key_metrics: string;
+  sources: SourceLink[];
 }
 
 interface ChatMessage {
@@ -190,7 +196,25 @@ export default function ValtruisDashboard() {
                 </div>
                 
                 <p className="text-slate-400 font-mono text-[11px] font-semibold mb-3">{company.key_metrics}</p>
-                <p className="text-slate-600 text-xs leading-relaxed mb-6">{company.description}</p>
+                <p className="text-slate-600 text-xs leading-relaxed mb-3">{company.description}</p>
+
+                {company.sources.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {company.sources.map((source, idx) => (
+                      <a
+                        key={idx}
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={source.title}
+                        onClick={(e) => e.stopPropagation()}
+                        className="max-w-[150px] truncate text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
+                      >
+                        {source.title}
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Hover-reveal Overlay Slide: Insights Deep Dive */}
