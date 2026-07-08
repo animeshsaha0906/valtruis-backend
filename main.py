@@ -1,11 +1,15 @@
 import os
-import json
 import feedparser
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import chromadb
-from google import genai
+from anthropic import Anthropic
+
+load_dotenv()
+
+CLAUDE_MODEL = "claude-sonnet-5"
 
 app = FastAPI()
 app.add_middleware(
@@ -16,9 +20,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ChromaDB globally so it persists during runtime
+# Initialize ChromaDB and the Claude client globally so they persist during runtime
 chroma_client = chromadb.Client()
 collection = chroma_client.get_or_create_collection(name="valtruis_pipeline")
+claude_client = Anthropic()
 
 class CompanyInsight(BaseModel):
     name: str = Field(description="Name of the company (Must be exactly one of the 5 watchlist targets)")
@@ -41,10 +46,12 @@ def scrape_healthcare_news():
         feed_url = "https://www.healthcaredive.com/feeds/news/"
         parsed_feed = feedparser.parse(feed_url)
         live_articles = []
+        
         for entry in parsed_feed.entries[:15]:
             clean_summary = entry.summary.replace('<p>', '').replace('</p>', '')
             live_articles.append(f"Market News: {entry.title}. Context: {clean_summary}")
         return live_articles
+        
     except Exception:
         return ["Market News: CMS signals continued support for downside risk models in 2026. Context: Regulatory updates favor value-based care frameworks over fee-for-service ecosystems."]
 
@@ -76,35 +83,39 @@ def get_realtime_insights():
     )
     retrieved_context = " ".join(results["documents"][0]) if results["documents"] else ""
     
-    client = genai.Client()
-    
     # Reinforced prompt enforcing the inclusion of all target companies
     prompt = f"""
     Act as a Senior Investment Director at Valtruis. Analyze how current macro conditions and market developments affect our target value-based care startup watchlist.
-    
+
     Live Market Context:
     {retrieved_context}
-    
+
     Target Watchlist to Analyze:
     1. Wayspring (Substance use disorder VBC asset)
     2. Wellvana (Primary care capitation enabler)
     3. Main Street Health (Rural provider VBC platform)
     4. InStride Health (Pediatric behavioral health risk contracts)
     5. Thyme Care (Oncology care management platform)
-    
+
     CRITICAL REQUIREMENT: You MUST populate the 'companies' array with EXACTLY 5 objects—one for each of the 5 targets listed above. Do not leave the array empty. Even if a target isn't mentioned in the live news headlines, use your core industry knowledge combined with the live macro context to project their 24-month valuation ($M), VBC alignment score (70-100), market sentiment, and an institutional investment thesis.
     """
-    
-    response = client.models.generate_content(
-        model='gemini-2.5-pro',
-        contents=prompt,
-        config={
-            'response_mime_type': 'application/json',
-            'response_schema': PortfolioData,
-        }
+
+    # Anthropic has no native structured-output mode, so a forced tool call
+    # stands in for Gemini's response_schema to guarantee JSON matching PortfolioData.
+    response = claude_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        tools=[{
+            "name": "return_portfolio",
+            "description": "Return the structured VBC watchlist analysis.",
+            "input_schema": PortfolioData.model_json_schema(),
+        }],
+        tool_choice={"type": "tool", "name": "return_portfolio"},
+        messages=[{"role": "user", "content": prompt}],
     )
-    
-    return json.loads(response.text)
+
+    tool_call = next(block for block in response.content if block.type == "tool_use")
+    return PortfolioData.model_validate(tool_call.input).model_dump()
 
 @app.post("/api/chat")
 def chat_with_analyst(request: ChatRequest):
@@ -114,21 +125,20 @@ def chat_with_analyst(request: ChatRequest):
     except Exception:
         retrieved_context = "Value-based care market acceleration."
 
-    client = genai.Client()
-    
     chat_prompt = f"""
     You are an AI Investment Analyst for Valtruis, a private equity firm focused on Value-Based Care (VBC).
-    Answer the user's question professionally, concisely, and cleanly. 
-    
+    Answer the user's question professionally, concisely, and cleanly.
+
     Context from our research database: {retrieved_context}
     User Question: {request.message}
-    
+
     Always frame your answers around shifting away from fee-for-service models into downside risk allocation.
     """
-    
-    response = client.models.generate_content(
-        model='gemini-2.5-pro',
-        contents=chat_prompt
+
+    response = claude_client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": chat_prompt}],
     )
-    
-    return {"reply": response.text}
+
+    return {"reply": response.content[0].text}
